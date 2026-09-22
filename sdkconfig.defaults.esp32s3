@@ -1,0 +1,3 @@
+# ESP32-S3 exposes only the native USB Full-Speed controller.
+CONFIG_CHERRYUSB_DEVICE_SPEED_FS=y
+CONFIG_EXAMPLE_USB_DEVICE_RHPORT_FS=y

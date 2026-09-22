@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "sdkconfig.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -19,25 +20,39 @@
 #include "usbd_core.h"
 #include "usbd_video.h"
 
+#define DWC2_ENDPOINT_COUNT     16
 #define UVC_BUS_ID              0
 #define UVC_VIDEO_IN_EP         0x81
 #define UVC_VIDEO_INT_EP        0x83
 #define UVC_WIDTH               LVGL_UVC_WIDTH
 #define UVC_HEIGHT              LVGL_UVC_HEIGHT
-#define UVC_FPS                 5U
-#define UVC_FRAME_INTERVAL      (10000000UL / UVC_FPS)
-#define UVC_FRAME_SIZE          ((uint32_t)UVC_WIDTH * UVC_HEIGHT * 2U)
-#define UVC_BIT_RATE            (UVC_FRAME_SIZE * 8U * UVC_FPS)
 
-/* Keep one 512-byte transaction per 125 us microframe. This matches the
- * default P4 EP1 TX FIFO and avoids host/DWC2 interoperability problems seen
- * with high-bandwidth multi-transaction isochronous endpoints. */
-#define UVC_HS_TRANSACTION_SIZE 512U
-#define UVC_HS_TRANSACTION_MULT 1U
-#define UVC_MAX_PAYLOAD_SIZE    \
-    (UVC_HS_TRANSACTION_SIZE * UVC_HS_TRANSACTION_MULT)
-#define UVC_VIDEO_PACKET_SIZE   \
-    (UVC_HS_TRANSACTION_SIZE | ((UVC_HS_TRANSACTION_MULT - 1U) << 11))
+#if CONFIG_IDF_TARGET_ESP32P4
+/* P4: one 512-byte transaction per 125 us High-Speed microframe. */
+#define UVC_FRAME_PERIOD_US     200000LL
+#define UVC_FRAME_INTERVAL      2000000UL
+#define UVC_FRAME_RATE_NAME     "5 FPS"
+#define UVC_MAX_PAYLOAD_SIZE    512U
+#define UVC_VIDEO_PACKET_SIZE   512U
+#define UVC_CONTROLLER_BASE     ESP_USB_HS0_BASE
+#define UVC_USB_MODE_NAME       "High-Speed"
+#elif CONFIG_IDF_TARGET_ESP32S3
+/* S3: one 512-byte transaction per 1 ms Full-Speed frame. */
+#define UVC_FRAME_PERIOD_US     1500000LL
+#define UVC_FRAME_INTERVAL      15000000UL
+#define UVC_FRAME_RATE_NAME     "0.67 FPS"
+#define UVC_MAX_PAYLOAD_SIZE    512U
+#define UVC_VIDEO_PACKET_SIZE   512U
+#define UVC_CONTROLLER_BASE     ESP_USB_FS0_BASE
+#define UVC_USB_MODE_NAME       "Full-Speed"
+#else
+#error "This UVC example supports only ESP32-P4 and ESP32-S3"
+#endif
+
+#define UVC_FRAME_SIZE          ((uint32_t)UVC_WIDTH * UVC_HEIGHT * 2U)
+#define UVC_BIT_RATE            \
+    ((uint32_t)(((uint64_t)UVC_FRAME_SIZE * 8U * 1000000ULL) / \
+                UVC_FRAME_PERIOD_US))
 
 #define UVC_VS_HEADER_SIZE \
     (VIDEO_SIZEOF_VS_INPUT_HEADER_DESC(1, 1) + \
@@ -50,6 +65,34 @@
 #define USBD_VID               0xFFFF
 #define USBD_PID               0xFFFF
 #define USBD_MAX_POWER         100
+
+/* CherryUSB's default ESP32-S3 layout gives every IN endpoint a 64-byte
+ * FIFO. This UVC-only device uses just EP0 and EP1, so reclaim the unused
+ * endpoint FIFO space and give video EP1 a 512-byte FIFO. Keep this callback
+ * in the app_main translation unit so static-library link ordering cannot
+ * discard it. The layout mirrors struct usb_dwc2_user_fifo_config. */
+struct usb_dwc2_user_fifo_config {
+    uint16_t device_rx_fifo_size;
+    uint16_t device_tx_fifo_size[DWC2_ENDPOINT_COUNT];
+};
+
+void dwc2_get_user_fifo_config(uint32_t reg_base,
+                               struct usb_dwc2_user_fifo_config *config)
+{
+    (void)reg_base;
+    memset(config, 0, sizeof(*config));
+
+#if CONFIG_IDF_TARGET_ESP32S3
+    /* S3: 56 RX + 16 EP0 + 128 EP1 = all 200 FIFO words. */
+    config->device_rx_fifo_size = 56;
+#elif CONFIG_IDF_TARGET_ESP32P4
+    /* P4 HS has 896 words; retain generous RX space. */
+    config->device_rx_fifo_size = 256;
+#endif
+
+    config->device_tx_fifo_size[0] = 16;  /* EP0:  64 bytes */
+    config->device_tx_fifo_size[1] = 128; /* EP1: 512 bytes */
+}
 
 static const char *TAG = "uvc_lvgl";
 
@@ -213,19 +256,20 @@ static void uvc_init(void)
                              UVC_FRAME_INTERVAL, UVC_FRAME_SIZE,
                              UVC_MAX_PAYLOAD_SIZE));
     usbd_add_endpoint(UVC_BUS_ID, &s_video_in_ep);
-    usbd_initialize(UVC_BUS_ID, ESP_USB_HS0_BASE, uvc_event_handler);
+    usbd_initialize(UVC_BUS_ID, UVC_CONTROLLER_BASE, uvc_event_handler);
 }
 
 static void uvc_stream_task(void *arg)
 {
     (void)arg;
-    const int64_t frame_period_us = 1000000LL / UVC_FPS;
+    const int64_t frame_period_us = UVC_FRAME_PERIOD_US;
 
     s_stream_task = xTaskGetCurrentTaskHandle();
     memset(s_packet_buffer, 0, sizeof(s_packet_buffer));
     uvc_init();
-    ESP_LOGI(TAG, "UVC ready: %ux%u YUY2 at %u FPS",
-             UVC_WIDTH, UVC_HEIGHT, UVC_FPS);
+    ESP_LOGI(TAG, "UVC ready (%s): %ux%u YUY2 at %s",
+             UVC_USB_MODE_NAME, UVC_WIDTH, UVC_HEIGHT,
+             UVC_FRAME_RATE_NAME);
 
     while (true) {
         if (!s_streaming) {
