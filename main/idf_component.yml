@@ -1,0 +1,5 @@
+## IDF Component Manager Manifest File
+dependencies:
+  cherry-embedded/cherryusb: =1.5.2~2
+  espressif/esp_lvgl_port:
+    version: "^2.6.0"
