@@ -10,7 +10,7 @@ source changes.
 
 ## Features
 
-- UVC resolution: 640 × 480
+- Default UVC resolution: 640 × 480 (compile-time configurable)
 - UVC pixel format: uncompressed YUY2 (`Y0 U Y1 V`)
 - LVGL internal pixel format: RGB565
 - Runs the official LVGL Widgets Demo
@@ -30,6 +30,40 @@ peripheral supports Full-Speed only and cannot transfer uncompressed video at
 this resolution at a conventional camera frame rate. The S3 frame interval is
 therefore set to 1.5 seconds. This is a USB bus bandwidth limitation, not an
 LVGL rendering limitation.
+
+## Configuring the resolution
+
+The default resolution is defined by two overridable macros in
+`main/lcd_lvgl.h`:
+
+```c
+#ifndef LVGL_UVC_WIDTH
+#define LVGL_UVC_WIDTH  640
+#endif
+
+#ifndef LVGL_UVC_HEIGHT
+#define LVGL_UVC_HEIGHT 480
+#endif
+```
+
+You can change the defaults directly or set the CMake cache values from the
+command line:
+
+```sh
+idf.py -DLVGL_UVC_WIDTH=320 -DLVGL_UVC_HEIGHT=240 reconfigure
+idf.py build
+```
+
+The top-level `CMakeLists.txt` maps these values to C compiler definitions. The
+selected dimensions are then used automatically by the LVGL virtual display,
+RGB565 framebuffer, YUY2 conversion, UVC descriptors, frame allocation,
+runtime log, and USB product string.
+
+The width must be an even integer from 2 through 65535 because packed YUY2
+encodes pixels in pairs. The height must be from 1 through 65535. Frame memory
+usage and required USB bandwidth increase with the selected pixel count; the
+target-specific frame intervals are not automatically increased when a larger
+resolution is selected.
 
 The default CherryUSB configuration for ESP32-S3 allocates only 64 bytes of TX
 FIFO to each IN endpoint. This project enables `CONFIG_USB_DWC2_CUSTOM_FIFO`,
@@ -74,7 +108,8 @@ with a 16 KB stack.
 - `sdkconfig.defaults`: common CherryUSB, LVGL, and PSRAM configuration
 - `sdkconfig.defaults.esp32p4`: ESP32-P4 High-Speed USB configuration
 - `sdkconfig.defaults.esp32s3`: ESP32-S3 Full-Speed USB configuration
-- `CMakeLists.txt`: globally enables the custom CherryUSB DWC2 FIFO layout
+- `CMakeLists.txt`: maps optional resolution values to compiler definitions and
+  globally enables the custom CherryUSB DWC2 FIFO layout
 
 `dwc2_get_user_fifo_config()` is intentionally kept in the same translation
 unit as `app_main()`. This ensures that the ESP-IDF static-library linker retains
@@ -85,7 +120,7 @@ references can cause `undefined reference to dwc2_get_user_fifo_config`.
 
 - ESP-IDF 6.1.0 (tested)
 - ESP32-P4 or ESP32-S3
-- PSRAM with at least approximately 1.3 MB available for the video buffers
+- PSRAM with approximately 1.3 MB available at the default 640 × 480 resolution
 - The native USB OTG D+ and D- pins correctly routed
 - A host camera application with UVC support
 
@@ -155,7 +190,9 @@ Check the serial log:
 3. Verify that both `UVC stream opened` and `First UVC frame sent` appear. If
    they do not, the host has not opened the stream or USB transfers are not
    completing.
-4. Make sure the camera application selected `LVGL USB Camera 640x480`.
+4. Make sure the camera application selected
+   `LVGL USB Camera <width>x<height>` (for example, the default device is
+   `LVGL USB Camera 640x480`).
 
 ### ESP32-S3 reports EP1 FIFO overflow
 

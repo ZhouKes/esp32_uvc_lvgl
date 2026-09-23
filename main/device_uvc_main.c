@@ -26,6 +26,8 @@
 #define UVC_VIDEO_INT_EP        0x83
 #define UVC_WIDTH               LVGL_UVC_WIDTH
 #define UVC_HEIGHT              LVGL_UVC_HEIGHT
+#define UVC_STRINGIFY_IMPL(x)   #x
+#define UVC_STRINGIFY(x)        UVC_STRINGIFY_IMPL(x)
 
 #if CONFIG_IDF_TARGET_ESP32P4
 /* P4: one 512-byte transaction per 125 us High-Speed microframe. */
@@ -140,7 +142,7 @@ static const uint8_t s_device_qualifier_descriptor[] = {
 static const char *s_string_descriptors[] = {
     (const char[]){ 0x09, 0x04 },
     "CherryUSB",
-    "LVGL USB Camera 640x480",
+    "LVGL USB Camera " UVC_STRINGIFY(UVC_WIDTH) "x" UVC_STRINGIFY(UVC_HEIGHT),
     "2026092201",
 };
 

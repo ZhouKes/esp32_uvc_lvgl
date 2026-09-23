@@ -9,7 +9,7 @@ ESP32-S3，选择 ESP-IDF target 后会自动适配 USB 控制器、总线速度
 
 ## 功能
 
-- UVC 分辨率：640 × 480
+- UVC 默认分辨率：640 × 480（可在编译时通过宏修改）
 - UVC 像素格式：未压缩 YUY2（`Y0 U Y1 V`）
 - LVGL 内部像素格式：RGB565
 - 运行 LVGL 官方 Widgets Demo
@@ -27,6 +27,35 @@ ESP32-S3，选择 ESP-IDF target 后会自动适配 USB 控制器、总线速度
 一帧 640 × 480 YUY2 图像需要 614400 字节。ESP32-S3 的原生 USB 外设仅支持
 Full-Speed，无法以常规摄像头帧率传输该尺寸的未压缩图像，因此 S3 的帧间隔
 设置为 1.5 秒。这是 USB 总线带宽限制，不是 LVGL 刷新速度限制。
+
+## 修改分辨率
+
+默认分辨率由 `main/lcd_lvgl.h` 中两个可覆盖宏定义：
+
+```c
+#ifndef LVGL_UVC_WIDTH
+#define LVGL_UVC_WIDTH  640
+#endif
+
+#ifndef LVGL_UVC_HEIGHT
+#define LVGL_UVC_HEIGHT 480
+#endif
+```
+
+可以直接修改默认值，也可以通过 CMake cache 参数传入：
+
+```sh
+idf.py -DLVGL_UVC_WIDTH=320 -DLVGL_UVC_HEIGHT=240 reconfigure
+idf.py build
+```
+
+工程顶层 `CMakeLists.txt` 会把这两个值转换为 C 编译宏。LVGL 虚拟显示、RGB565
+帧缓冲、YUY2 转换、UVC 描述符、帧内存分配、运行日志和 USB 产品名称都会自动
+使用所选分辨率。
+
+由于 YUY2 按两个像素一组打包，宽度必须是 2～65535 范围内的偶数，高度必须在
+1～65535 范围内。分辨率越高，占用的帧内存和 USB 带宽越大；选择比默认值更大
+的分辨率时，当前各芯片的帧间隔不会自动增大。
 
 ESP32-S3 的 CherryUSB 默认配置只为每个 IN 端点分配 64 字节 TX FIFO。本工程
 启用了 `CONFIG_USB_DWC2_CUSTOM_FIFO`，回收未使用端点的 FIFO，将视频 EP1 的
@@ -67,7 +96,8 @@ LVGL 使用 40 行的局部绘制缓冲区，将刷新区域复制到完整虚�
 - `sdkconfig.defaults`：两个芯片共用的 CherryUSB、LVGL 和 PSRAM 配置
 - `sdkconfig.defaults.esp32p4`：ESP32-P4 High-Speed USB 配置
 - `sdkconfig.defaults.esp32s3`：ESP32-S3 Full-Speed USB 配置
-- `CMakeLists.txt`：为 CherryUSB 全局启用自定义 DWC2 FIFO
+- `CMakeLists.txt`：将可选分辨率参数转换为编译宏，并为 CherryUSB 全局启用自定义
+  DWC2 FIFO
 
 `dwc2_get_user_fifo_config()` 与 `app_main()` 保持在同一个源文件中，确保 ESP-IDF
 静态库链接时不会丢弃该回调。若将它移到独立、且没有其他强引用的源文件中，
@@ -77,7 +107,7 @@ LVGL 使用 40 行的局部绘制缓冲区，将刷新区域复制到完整虚�
 
 - ESP-IDF 6.1.0（已测试）
 - ESP32-P4 或 ESP32-S3
-- 可用的 PSRAM，缓冲区合计约占用 1.3 MB
+- 可用的 PSRAM，默认 640 × 480 分辨率下缓冲区合计约占用 1.3 MB
 - 正确连接芯片原生 USB OTG 的 D+、D- 引脚
 - 电脑端支持 UVC 的摄像头应用
 
@@ -142,7 +172,8 @@ P4 的第二行会显示 `High-Speed` 和 `5 FPS`。电脑打开摄像头后才�
    可能没有实际内容。
 3. 是否出现 `UVC stream opened` 和 `First UVC frame sent`；若没有，说明主机没有
    打开视频流，或 USB 传输没有完成。
-4. 确认摄像头应用选择的是 `LVGL USB Camera 640x480`。
+4. 确认摄像头应用选择的是 `LVGL USB Camera <宽度>x<高度>`，例如默认配置对应
+   `LVGL USB Camera 640x480`。
 
 ### ESP32-S3 报 EP1 FIFO overflow
 
